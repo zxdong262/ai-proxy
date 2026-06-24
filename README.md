@@ -91,6 +91,8 @@ Each service is exposed at `/<name>/v1/messages` and `/<name>/v1/*`:
 |---|---|---|
 | `HOST` | `0.0.0.0` | Server bind address |
 | `PORT` | `8088` | Server port |
+| `SECRET` | *(optional)* | JWT signing secret. Enables JWT verification on all config routes. |
+| `UNIFIED_TOKEN` | *(optional)* | Required access token claim. JWT payload must contain `{ "token": "<UNIFIED_TOKEN>" }`. |
 
 Set these in a `.env` file or as environment variables.
 
@@ -124,6 +126,45 @@ This is useful when:
 - You want each client to authenticate independently with the upstream service
 
 **Important:** When using passthrough mode, make sure your remote service supports the `Authorization` header from the request and is compatible with the Anthropic API.
+
+### Public Deployment Security (JWT)
+
+When deploying to a public server, set both `SECRET` and `UNIFIED_TOKEN` environment variables to require JWT authentication on all config routes. This prevents unauthorized access to your proxy.
+
+**How it works:**
+
+1. Set `SECRET` (JWT signing key) and `UNIFIED_TOKEN` (required access token) in your `.env`
+2. Clients must send a JWT in the `Authorization: Bearer <jwt>` header
+3. The JWT must be signed with `SECRET` and contain `{ "token": "<UNIFIED_TOKEN>" }` in its payload
+4. Requests with invalid, expired, or missing JWTs are rejected with `401`
+
+**Client example (generating a JWT):**
+
+```js
+import jwt from "jsonwebtoken";
+
+const token = jwt.sign(
+  { token: process.env.UNIFIED_TOKEN },
+  process.env.SECRET,
+  { expiresIn: "30d" }
+);
+// Use token in Authorization: Bearer <token>
+```
+
+**Claude Code example:**
+
+```bash
+# Generate a long-lived JWT for Claude Code
+export ANTHROPIC_AUTH_TOKEN=$(node -e "
+  const jwt = require('jsonwebtoken');
+  console.log(jwt.sign({token: process.env.UNIFIED_TOKEN}, process.env.SECRET, {expiresIn: '365d'}));
+")
+export ANTHROPIC_BASE_URL=http://your-server:8088/openai
+
+claude
+```
+
+When `SECRET` or `UNIFIED_TOKEN` is not set, JWT verification is skipped and the proxy behaves as before (any Bearer token is accepted).
 
 ## Usage with Claude Code
 

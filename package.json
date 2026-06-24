@@ -9,6 +9,8 @@
     "test": "vitest run",
     "test:unit": "vitest run tests/converter.test.js tests/auth.test.js tests/multi-service.test.js",
     "test:integration": "vitest run tests/integration.test.js",
+    "fix": "standard --fix",
+    "lint": "standard",
     "pm2:start": "pm2 start ecosystem.config.cjs",
     "pm2:stop": "pm2 stop ai-proxy",
     "pm2:restart": "pm2 restart ai-proxy",
@@ -42,9 +44,11 @@
   "dependencies": {
     "cors": "^2.8.6",
     "express": "^5.2.1",
+    "jsonwebtoken": "^9.0.3",
     "pug": "^3.0.4"
   },
   "devDependencies": {
+    "standard": "^17.1.2",
     "supertest": "^7.2.2",
     "vitest": "^3.2.1"
   }
