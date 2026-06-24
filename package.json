@@ -1,0 +1,51 @@
+{
+  "name": "ai-proxy",
+  "version": "1.0.0",
+  "description": "A lightweight proxy that translates Anthropic Messages API requests into OpenAI Chat Completions API format, enabling Claude Code and Anthropic SDKs to work with any OpenAI-compatible LLM provider.",
+  "type": "module",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "vitest run",
+    "test:unit": "vitest run tests/converter.test.js tests/auth.test.js tests/multi-service.test.js",
+    "test:integration": "vitest run tests/integration.test.js",
+    "pm2:start": "pm2 start ecosystem.config.cjs",
+    "pm2:stop": "pm2 stop ai-proxy",
+    "pm2:restart": "pm2 restart ai-proxy",
+    "pm2:logs": "pm2 logs ai-proxy"
+  },
+  "keywords": [
+    "ai-proxy",
+    "anthropic",
+    "openai",
+    "claude",
+    "claude-code",
+    "llm-proxy",
+    "api-proxy",
+    "chat-completions",
+    "messages-api",
+    "reverse-proxy"
+  ],
+  "author": "ZHAO Xudong (https://github.com/zxdong262)",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/zxdong262/ai-proxy.git"
+  },
+  "bugs": {
+    "url": "https://github.com/zxdong262/ai-proxy/issues"
+  },
+  "homepage": "https://github.com/zxdong262/ai-proxy#readme",
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "cors": "^2.8.6",
+    "express": "^5.2.1",
+    "pug": "^3.0.4"
+  },
+  "devDependencies": {
+    "supertest": "^7.2.2",
+    "vitest": "^3.2.1"
+  }
+}

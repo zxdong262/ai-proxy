@@ -1,0 +1,127 @@
+doctype html
+html(lang="en")
+  head
+    meta(charset="UTF-8")
+    meta(name="viewport" content="width=device-width, initial-scale=1.0")
+    title AI Proxy
+    style.
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f5f5f5; color: #333; padding: 2rem; }
+      .container { max-width: 900px; margin: 0 auto; }
+      h1 { font-size: 1.8rem; margin-bottom: 0.5rem; }
+      .subtitle { color: #666; margin-bottom: 2rem; }
+      .card { background: #fff; border-radius: 8px; padding: 1.5rem; margin-bottom: 1.5rem; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+      .card h2 { font-size: 1.2rem; margin-bottom: 1rem; color: #222; }
+      table { width: 100%; border-collapse: collapse; }
+      th, td { text-align: left; padding: 0.6rem 0.8rem; border-bottom: 1px solid #eee; }
+      th { font-weight: 600; color: #555; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.5px; }
+      .badge { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 4px; font-size: 0.8rem; font-weight: 500; }
+      .badge-key { background: #e3f2fd; color: #1565c0; }
+      .badge-passthrough { background: #fff3e0; color: #e65100; }
+      pre { background: #1e1e1e; color: #d4d4d4; padding: 1rem; border-radius: 6px; overflow-x: auto; font-size: 0.85rem; line-height: 1.5; }
+      pre .key { color: #9cdcfe; }
+      pre .str { color: #ce9178; }
+      pre .bool { color: #569cd6; }
+      pre .num { color: #b5cea8; }
+      .route-select { margin-bottom: 1rem; }
+      .route-select button { padding: 0.4rem 1rem; margin-right: 0.5rem; border: 1px solid #ddd; border-radius: 4px; background: #fff; cursor: pointer; font-size: 0.9rem; }
+      .route-select button.active { background: #1565c0; color: #fff; border-color: #1565c0; }
+      .config-block { display: none; }
+      .config-block.active { display: block; }
+      .health { display: inline-block; padding: 0.3rem 0.8rem; border-radius: 4px; font-size: 0.85rem; }
+      .health-ok { background: #e8f5e9; color: #2e7d32; }
+      code { background: #f0f0f0; padding: 0.15rem 0.4rem; border-radius: 3px; font-size: 0.85rem; }
+  body
+    .container
+      h1 AI Proxy
+      p.subtitle Lightweight Anthropic → OpenAI API translator
+
+      .card
+        h2 Status
+        p
+          span.health.health-ok ✓ Running
+          | &nbsp;&nbsp;
+          code GET /health
+          |  →
+          code { "status": "ok" }
+
+      .card
+        h2 Configured Routes
+        table
+          thead
+            tr
+              th Name
+              th Remote API
+              th Endpoint
+              th Auth
+          tbody
+            each route in routes
+              tr
+                td
+                  strong= route.name
+                td= route.remote_api_url
+                td= route.messages_endpoint || '/chat/completions'
+                td
+                  if route.api_key
+                    span.badge.badge-key API Key
+                  else
+                    span.badge.badge-passthrough Passthrough
+
+      .card
+        h2 Claude Code Configuration
+        p(style="margin-bottom: 1rem; color: #666;") Add this to your Claude Code settings to use the proxy:
+        .route-select
+          each route, i in routes
+            button(class=i === 0 ? 'active' : '', onclick=`showConfig(${i})`)= route.name
+        each route, i in routes
+          .config-block(class=i === 0 ? 'active' : '', id=`config-${i}`)
+            pre
+              | {
+              |   "env": {
+              |     "ANTHROPIC_BASE_URL": "#{baseUrl}/#{route.name}",
+              if route.api_key
+                |     "ANTHROPIC_AUTH_TOKEN": "#{route.api_key}",
+              else
+                |     "ANTHROPIC_AUTH_TOKEN": "your-auth-token",
+              |     "ANTHROPIC_MODEL": "your-model-name"
+              |   },
+              |   "permissions": {
+              |     "defaultMode": "auto"
+              |   }
+              | }
+
+      .card
+        h2 Endpoints
+        table
+          thead
+            tr
+              th Method
+              th Path
+              th Description
+          tbody
+            each route in routes
+              tr
+                td POST
+                td
+                  code /#{route.name}/v1/messages
+                td Anthropic Messages API (streaming & non-streaming)
+              tr
+                td GET
+                td
+                  code /#{route.name}/v1/models
+                td List available models
+            tr
+              td GET
+              td
+                code /health
+              td Health check
+
+    script.
+      function showConfig(index) {
+        document.querySelectorAll('.config-block').forEach((el, i) => {
+          el.classList.toggle('active', i === index);
+        });
+        document.querySelectorAll('.route-select button').forEach((el, i) => {
+          el.classList.toggle('active', i === index);
+        });
+      }
