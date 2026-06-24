@@ -10,12 +10,19 @@
  * When the service has no api_key (passthrough mode): forwards the client's
  * Authorization header directly to the upstream remote service.
  *
- * When SECRET and UNIFIED_TOKEN env vars are set: verifies the bearer token as
- * a JWT signed with SECRET, and checks that the payload contains
- * { "token": UNIFIED_TOKEN }. This secures all config routes for public deployment.
+ * When UNIFIED_TOKEN is set: compares the bearer token against it using
+ * constant-time comparison to prevent timing attacks.
  */
 
-import jwt from 'jsonwebtoken'
+import { timingSafeEqual } from 'node:crypto'
+
+function safeCompare (a, b) {
+  if (typeof a !== 'string' || typeof b !== 'string') return false
+  const bufA = Buffer.from(a)
+  const bufB = Buffer.from(b)
+  if (bufA.length !== bufB.length) return false
+  return timingSafeEqual(bufA, bufB)
+}
 
 export function authMiddleware (req, res, next) {
   const authHeader = req.headers.authorization
@@ -30,17 +37,11 @@ export function authMiddleware (req, res, next) {
       .json({ error: 'Invalid Authorization format. Expected "Bearer <token>"' })
   }
 
-  // When SECRET and UNIFIED_TOKEN are set, verify the JWT before proceeding.
-  const secret = process.env.SECRET
+  // When UNIFIED_TOKEN is set, verify the token with constant-time comparison.
   const unifiedToken = process.env.UNIFIED_TOKEN
-  if (secret && unifiedToken) {
-    try {
-      const decoded = jwt.verify(token, secret)
-      if (decoded.token !== unifiedToken) {
-        return res.status(401).json({ error: 'Invalid token' })
-      }
-    } catch {
-      return res.status(401).json({ error: 'Invalid or expired JWT' })
+  if (unifiedToken) {
+    if (!safeCompare(token, unifiedToken)) {
+      return res.status(401).json({ error: 'Invalid token' })
     }
   }
 

@@ -1,11 +1,8 @@
 import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest'
-import jwt from 'jsonwebtoken'
 
-const TEST_SECRET = 'test-jwt-secret'
-const TEST_UNIFIED_TOKEN = 'test-unified-token'
+const TEST_UNIFIED_TOKEN = 'test-unified-token-abc123'
 
 function loadMiddleware () {
-  // Dynamic import to get fresh module
   return import('../src/middleware/auth.js').then((m) => m.authMiddleware)
 }
 
@@ -117,11 +114,10 @@ describe('authMiddleware', () => {
   })
 })
 
-describe('authMiddleware with JWT verification (SECRET + UNIFIED_TOKEN)', () => {
+describe('authMiddleware with UNIFIED_TOKEN verification', () => {
   const originalEnv = { ...process.env }
 
   beforeEach(() => {
-    process.env.SECRET = TEST_SECRET
     process.env.UNIFIED_TOKEN = TEST_UNIFIED_TOKEN
   })
 
@@ -129,10 +125,9 @@ describe('authMiddleware with JWT verification (SECRET + UNIFIED_TOKEN)', () => 
     process.env = { ...originalEnv }
   })
 
-  test('accepts valid JWT with correct token claim', async () => {
+  test('accepts request with correct token', async () => {
     const authMiddleware = await loadMiddleware()
-    const token = jwt.sign({ token: TEST_UNIFIED_TOKEN }, TEST_SECRET)
-    const { req, res } = mockReqRes(`Bearer ${token}`)
+    const { req, res } = mockReqRes(`Bearer ${TEST_UNIFIED_TOKEN}`)
     const next = vi.fn()
 
     authMiddleware(req, res, next)
@@ -141,10 +136,9 @@ describe('authMiddleware with JWT verification (SECRET + UNIFIED_TOKEN)', () => 
     expect(res._status).toBeNull()
   })
 
-  test('rejects JWT with wrong token claim', async () => {
+  test('rejects request with wrong token', async () => {
     const authMiddleware = await loadMiddleware()
-    const token = jwt.sign({ token: 'wrong-token' }, TEST_SECRET)
-    const { req, res } = mockReqRes(`Bearer ${token}`)
+    const { req, res } = mockReqRes('Bearer wrong-token')
     const next = vi.fn()
 
     authMiddleware(req, res, next)
@@ -154,45 +148,7 @@ describe('authMiddleware with JWT verification (SECRET + UNIFIED_TOKEN)', () => 
     expect(next).not.toHaveBeenCalled()
   })
 
-  test('rejects JWT signed with wrong secret', async () => {
-    const authMiddleware = await loadMiddleware()
-    const token = jwt.sign({ token: TEST_UNIFIED_TOKEN }, 'wrong-secret')
-    const { req, res } = mockReqRes(`Bearer ${token}`)
-    const next = vi.fn()
-
-    authMiddleware(req, res, next)
-
-    expect(res._status).toBe(401)
-    expect(res._body.error).toContain('Invalid or expired JWT')
-    expect(next).not.toHaveBeenCalled()
-  })
-
-  test('rejects expired JWT', async () => {
-    const authMiddleware = await loadMiddleware()
-    const token = jwt.sign({ token: TEST_UNIFIED_TOKEN }, TEST_SECRET, { expiresIn: '-1s' })
-    const { req, res } = mockReqRes(`Bearer ${token}`)
-    const next = vi.fn()
-
-    authMiddleware(req, res, next)
-
-    expect(res._status).toBe(401)
-    expect(res._body.error).toContain('Invalid or expired JWT')
-    expect(next).not.toHaveBeenCalled()
-  })
-
-  test('rejects plain string token when JWT is required', async () => {
-    const authMiddleware = await loadMiddleware()
-    const { req, res } = mockReqRes(`Bearer ${TEST_UNIFIED_TOKEN}`)
-    const next = vi.fn()
-
-    authMiddleware(req, res, next)
-
-    expect(res._status).toBe(401)
-    expect(res._body.error).toContain('Invalid or expired JWT')
-    expect(next).not.toHaveBeenCalled()
-  })
-
-  test('rejects request without Authorization header when JWT is required', async () => {
+  test('rejects request without Authorization header when UNIFIED_TOKEN is set', async () => {
     const authMiddleware = await loadMiddleware()
     const { req, res } = mockReqRes(null)
     const next = vi.fn()
@@ -204,31 +160,18 @@ describe('authMiddleware with JWT verification (SECRET + UNIFIED_TOKEN)', () => 
     expect(next).not.toHaveBeenCalled()
   })
 
-  test('sets _passthroughToken for passthrough service with valid JWT', async () => {
+  test('sets _passthroughToken for passthrough service with valid token', async () => {
     const authMiddleware = await loadMiddleware()
-    const token = jwt.sign({ token: TEST_UNIFIED_TOKEN }, TEST_SECRET)
-    const { req, res } = mockReqRes(`Bearer ${token}`, { name: 'test', api_key: '' })
+    const { req, res } = mockReqRes(`Bearer ${TEST_UNIFIED_TOKEN}`, { name: 'test', api_key: '' })
     const next = vi.fn()
 
     authMiddleware(req, res, next)
 
     expect(next).toHaveBeenCalled()
-    expect(req._passthroughToken).toBe(token)
+    expect(req._passthroughToken).toBe(TEST_UNIFIED_TOKEN)
   })
 
-  test('skips JWT verification when SECRET is not set', async () => {
-    delete process.env.SECRET
-    const authMiddleware = await loadMiddleware()
-    const { req, res } = mockReqRes('Bearer plain-token')
-    const next = vi.fn()
-
-    authMiddleware(req, res, next)
-
-    expect(next).toHaveBeenCalled()
-    expect(res._status).toBeNull()
-  })
-
-  test('skips JWT verification when UNIFIED_TOKEN is not set', async () => {
+  test('skips token verification when UNIFIED_TOKEN is not set', async () => {
     delete process.env.UNIFIED_TOKEN
     const authMiddleware = await loadMiddleware()
     const { req, res } = mockReqRes('Bearer plain-token')
@@ -240,15 +183,25 @@ describe('authMiddleware with JWT verification (SECRET + UNIFIED_TOKEN)', () => 
     expect(res._status).toBeNull()
   })
 
-  test('accepts JWT with extra claims beyond token', async () => {
+  test('rejects token with same prefix but different length', async () => {
     const authMiddleware = await loadMiddleware()
-    const token = jwt.sign({ token: TEST_UNIFIED_TOKEN, role: 'admin', iat: Math.floor(Date.now() / 1000) }, TEST_SECRET)
-    const { req, res } = mockReqRes(`Bearer ${token}`)
+    const { req, res } = mockReqRes(`Bearer ${TEST_UNIFIED_TOKEN}x`)
     const next = vi.fn()
 
     authMiddleware(req, res, next)
 
-    expect(next).toHaveBeenCalled()
-    expect(res._status).toBeNull()
+    expect(res._status).toBe(401)
+    expect(next).not.toHaveBeenCalled()
+  })
+
+  test('rejects empty token', async () => {
+    const authMiddleware = await loadMiddleware()
+    const { req, res } = mockReqRes('Bearer ')
+    const next = vi.fn()
+
+    authMiddleware(req, res, next)
+
+    expect(res._status).toBe(401)
+    expect(next).not.toHaveBeenCalled()
   })
 })

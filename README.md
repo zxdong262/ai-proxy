@@ -91,8 +91,7 @@ Each service is exposed at `/<name>/v1/messages` and `/<name>/v1/*`:
 |---|---|---|
 | `HOST` | `0.0.0.0` | Server bind address |
 | `PORT` | `8088` | Server port |
-| `SECRET` | *(optional)* | JWT signing secret. Enables JWT verification on all config routes. |
-| `UNIFIED_TOKEN` | *(optional)* | Required access token claim. JWT payload must contain `{ "token": "<UNIFIED_TOKEN>" }`. |
+| `UNIFIED_TOKEN` | *(optional)* | API access token. When set, clients must send this token in `Authorization: Bearer <token>`. |
 
 Set these in a `.env` file or as environment variables.
 
@@ -127,44 +126,27 @@ This is useful when:
 
 **Important:** When using passthrough mode, make sure your remote service supports the `Authorization` header from the request and is compatible with the Anthropic API.
 
-### Public Deployment Security (JWT)
+### Public Deployment Security
 
-When deploying to a public server, set both `SECRET` and `UNIFIED_TOKEN` environment variables to require JWT authentication on all config routes. This prevents unauthorized access to your proxy.
+When deploying to a public server, set the `UNIFIED_TOKEN` environment variable to require token authentication on all routes. This prevents unauthorized access to your proxy.
 
 **How it works:**
 
-1. Set `SECRET` (JWT signing key) and `UNIFIED_TOKEN` (required access token) in your `.env`
-2. Clients must send a JWT in the `Authorization: Bearer <jwt>` header
-3. The JWT must be signed with `SECRET` and contain `{ "token": "<UNIFIED_TOKEN>" }` in its payload
-4. Requests with invalid, expired, or missing JWTs are rejected with `401`
-
-**Client example (generating a JWT):**
-
-```js
-import jwt from "jsonwebtoken";
-
-const token = jwt.sign(
-  { token: process.env.UNIFIED_TOKEN },
-  process.env.SECRET,
-  { expiresIn: "30d" }
-);
-// Use token in Authorization: Bearer <token>
-```
+1. Set `UNIFIED_TOKEN` in your `.env` to a strong random string
+2. Clients must send the token in the `Authorization: Bearer <token>` header
+3. Requests with invalid or missing tokens are rejected with `401`
+4. Uses constant-time comparison to prevent timing attacks
 
 **Claude Code example:**
 
 ```bash
-# Generate a long-lived JWT for Claude Code
-export ANTHROPIC_AUTH_TOKEN=$(node -e "
-  const jwt = require('jsonwebtoken');
-  console.log(jwt.sign({token: process.env.UNIFIED_TOKEN}, process.env.SECRET, {expiresIn: '365d'}));
-")
+export ANTHROPIC_AUTH_TOKEN=your-unified-token
 export ANTHROPIC_BASE_URL=http://your-server:8088/openai
 
 claude
 ```
 
-When `SECRET` or `UNIFIED_TOKEN` is not set, JWT verification is skipped and the proxy behaves as before (any Bearer token is accepted).
+When `UNIFIED_TOKEN` is not set, token verification is skipped and the proxy accepts any Bearer token.
 
 ## Usage with Claude Code
 

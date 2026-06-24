@@ -27,12 +27,12 @@ export function loadConfig () {
     // Try ESM-style: extract the object after `export default`
     const match = content.match(/export\s+default\s+(\{[\s\S]*\})/)
     if (match) {
-      cfg = JSON.parse(match[1])
+      cfg = new Function(`return ${match[1]}`)() // eslint-disable-line no-new-func
     } else {
       // Try CommonJS-style: extract the object after `module.exports =`
       const cjsMatch = content.match(/module\.exports\s*=\s*(\{[\s\S]*\})/)
       if (cjsMatch) {
-        cfg = JSON.parse(cjsMatch[1])
+        cfg = new Function(`return ${cjsMatch[1]}`)() // eslint-disable-line no-new-func
       } else {
         throw new Error("Could not parse config.js — expected 'export default { ... }' or 'module.exports = { ... }'")
       }

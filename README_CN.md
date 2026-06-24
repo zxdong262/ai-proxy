@@ -91,8 +91,7 @@ export default {
 |---|---|---|
 | `HOST` | `0.0.0.0` | 服务器绑定地址 |
 | `PORT` | `8088` | 服务器端口 |
-| `SECRET` | *(可选)* | JWT 签名密钥。设置后启用所有配置路由的 JWT 验证。 |
-| `UNIFIED_TOKEN` | *(可选)* | 必需的访问令牌声明。JWT 载荷必须包含 `{ "token": "<UNIFIED_TOKEN>" }`。 |
+| `UNIFIED_TOKEN` | *(可选)* | API 访问令牌。设置后，客户端必须在 `Authorization: Bearer <token>` 头中发送此令牌。 |
 
 通过 `.env` 文件或环境变量设置。
 
@@ -127,44 +126,27 @@ export default {
 
 **重要提示：** 使用透传模式时，请确保你的远程服务支持请求中的 `Authorization` 头，并且与 Anthropic API 兼容。
 
-### 公共部署安全（JWT）
+### 公共部署安全
 
-当部署到公共服务器时，设置 `SECRET` 和 `UNIFIED_TOKEN` 环境变量，要求所有配置路由使用 JWT 认证。这可以防止对代理的未授权访问。
+当部署到公共服务器时，设置 `UNIFIED_TOKEN` 环境变量，要求所有路由使用令牌认证。这可以防止对代理的未授权访问。
 
 **工作原理：**
 
-1. 在 `.env` 中设置 `SECRET`（JWT 签名密钥）和 `UNIFIED_TOKEN`（必需的访问令牌）
-2. 客户端必须在 `Authorization: Bearer <jwt>` 头中发送 JWT
-3. JWT 必须使用 `SECRET` 签名，并在载荷中包含 `{ "token": "<UNIFIED_TOKEN>" }`
-4. 无效、过期或缺少 JWT 的请求将被拒绝，返回 `401`
-
-**客户端示例（生成 JWT）：**
-
-```js
-import jwt from "jsonwebtoken";
-
-const token = jwt.sign(
-  { token: process.env.UNIFIED_TOKEN },
-  process.env.SECRET,
-  { expiresIn: "30d" }
-);
-// 在 Authorization: Bearer <token> 中使用 token
-```
+1. 在 `.env` 中设置 `UNIFIED_TOKEN` 为一个强随机字符串
+2. 客户端必须在 `Authorization: Bearer <token>` 头中发送此令牌
+3. 无效或缺少令牌的请求将被拒绝，返回 `401`
+4. 使用常量时间比较防止时序攻击
 
 **Claude Code 示例：**
 
 ```bash
-# 为 Claude Code 生成长期有效的 JWT
-export ANTHROPIC_AUTH_TOKEN=$(node -e "
-  const jwt = require('jsonwebtoken');
-  console.log(jwt.sign({token: process.env.UNIFIED_TOKEN}, process.env.SECRET, {expiresIn: '365d'}));
-")
+export ANTHROPIC_AUTH_TOKEN=your-unified-token
 export ANTHROPIC_BASE_URL=http://your-server:8088/openai
 
 claude
 ```
 
-当 `SECRET` 或 `UNIFIED_TOKEN` 未设置时，JWT 验证将被跳过，代理行为与之前相同（接受任何 Bearer 令牌）。
+当 `UNIFIED_TOKEN` 未设置时，令牌验证将被跳过，代理接受任何 Bearer 令牌。
 
 ## 配合 Claude Code 使用
 
