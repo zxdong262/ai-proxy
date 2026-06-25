@@ -3,6 +3,9 @@ import { existsSync, writeFileSync, unlinkSync, readFileSync } from 'node:fs'
 import { resolve, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+// Set UNIFIED_TOKEN for tests
+process.env.UNIFIED_TOKEN = 'test-unified-token'
+
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const configPath = resolve(__dirname, '../config.js')
 let savedConfig = null
@@ -116,7 +119,7 @@ describe('Multi-service route registration', () => {
     vi.doMock('../src/config.js', () => ({
       loadConfig: () => [
         { name: 'svc-a', remote_api_url: 'https://api.example.com/v1', api_key: 'key-a' },
-        { name: 'svc-b', remote_api_url: 'https://api.example.com/v1', api_key: '' }
+        { name: 'svc-b', remote_api_url: 'https://api.example.com/v1', api_key: 'key-b' }
       ]
     }))
 
@@ -158,4 +161,5 @@ describe('Multi-service route registration', () => {
       .set('Authorization', 'Bearer test')
     expect(resB.status).not.toBe(404)
   })
+
 })

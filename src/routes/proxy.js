@@ -24,13 +24,21 @@ function proxyRequest (req, res) {
   const isHttps = url.protocol === 'https:'
   const transport = isHttps ? https : http
 
+  console.log(`[proxy] ${req.method} ${remotePath} → ${url}`)
+
   const hasBody = req.method !== 'GET' && req.method !== 'HEAD'
   const payload = hasBody ? JSON.stringify(req.body) : null
 
-  const apiKey = serviceConfig.api_key || req._passthroughToken
+  const apiKey = serviceConfig.api_key
+  const authType = serviceConfig.auth_type || 'bearer'
   const headers = {
-    Authorization: `Bearer ${apiKey}`,
     Accept: 'application/json'
+  }
+
+  if (authType === 'api-key') {
+    headers['api-key'] = apiKey
+  } else {
+    headers.Authorization = `Bearer ${apiKey}`
   }
   if (hasBody) {
     headers['Content-Type'] = 'application/json'
@@ -44,6 +52,7 @@ function proxyRequest (req, res) {
       headers
     },
     (upstreamRes) => {
+      console.log(`[proxy] ← ${upstreamRes.statusCode} from ${url}`)
       res.status(upstreamRes.statusCode)
       for (const [key, value] of Object.entries(upstreamRes.headers)) {
         // Skip hop-by-hop headers
@@ -55,6 +64,7 @@ function proxyRequest (req, res) {
   )
 
   upstreamReq.on('error', (err) => {
+    console.error(`[proxy] ERROR: ${err.message}`)
     if (!res.headersSent) {
       res.status(502).json({ error: { type: 'proxy_error', message: err.message } })
     }

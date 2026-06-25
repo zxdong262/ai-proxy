@@ -6,10 +6,9 @@ function loadMiddleware () {
   return import('../src/middleware/auth.js').then((m) => m.authMiddleware)
 }
 
-function mockReqRes (authHeader, serviceConfig) {
+function mockReqRes (authHeader) {
   const req = {
-    headers: authHeader ? { authorization: authHeader } : {},
-    _serviceConfig: serviceConfig !== undefined ? serviceConfig : { name: 'test', api_key: 'test-key' }
+    headers: authHeader ? { authorization: authHeader } : {}
   }
   const res = {
     _status: null,
@@ -27,6 +26,16 @@ function mockReqRes (authHeader, serviceConfig) {
 }
 
 describe('authMiddleware', () => {
+  const originalEnv = { ...process.env }
+
+  beforeEach(() => {
+    process.env.UNIFIED_TOKEN = TEST_UNIFIED_TOKEN
+  })
+
+  afterEach(() => {
+    process.env = { ...originalEnv }
+  })
+
   test('rejects request without Authorization header', async () => {
     const authMiddleware = await loadMiddleware()
     const { req, res } = mockReqRes(null)
@@ -50,81 +59,6 @@ describe('authMiddleware', () => {
     expect(next).not.toHaveBeenCalled()
   })
 
-  test('accepts Bearer token and calls next when service has api_key', async () => {
-    const authMiddleware = await loadMiddleware()
-    const { req, res } = mockReqRes('Bearer client-token', {
-      name: 'test',
-      api_key: 'service-key'
-    })
-    const next = vi.fn()
-
-    authMiddleware(req, res, next)
-
-    expect(next).toHaveBeenCalled()
-    expect(req._passthroughToken).toBeUndefined()
-  })
-
-  test('sets _passthroughToken when service has no api_key', async () => {
-    const authMiddleware = await loadMiddleware()
-    const { req, res } = mockReqRes('Bearer my-anthropic-token', {
-      name: 'test',
-      api_key: ''
-    })
-    const next = vi.fn()
-
-    authMiddleware(req, res, next)
-
-    expect(next).toHaveBeenCalled()
-    expect(req._passthroughToken).toBe('my-anthropic-token')
-  })
-
-  test('sets _passthroughToken when api_key is omitted', async () => {
-    const authMiddleware = await loadMiddleware()
-    const { req, res } = mockReqRes('Bearer my-token', {
-      name: 'test'
-    })
-    const next = vi.fn()
-
-    authMiddleware(req, res, next)
-
-    expect(next).toHaveBeenCalled()
-    expect(req._passthroughToken).toBe('my-token')
-  })
-
-  test('sets _passthroughToken when no service config is present', async () => {
-    const authMiddleware = await loadMiddleware()
-    const { req, res } = mockReqRes('Bearer my-token', null)
-    const next = vi.fn()
-
-    authMiddleware(req, res, next)
-
-    expect(next).toHaveBeenCalled()
-    expect(req._passthroughToken).toBe('my-token')
-  })
-
-  test('still requires Authorization header in passthrough mode', async () => {
-    const authMiddleware = await loadMiddleware()
-    const { req, res } = mockReqRes(null, { name: 'test', api_key: '' })
-    const next = vi.fn()
-
-    authMiddleware(req, res, next)
-
-    expect(res._status).toBe(401)
-    expect(next).not.toHaveBeenCalled()
-  })
-})
-
-describe('authMiddleware with UNIFIED_TOKEN verification', () => {
-  const originalEnv = { ...process.env }
-
-  beforeEach(() => {
-    process.env.UNIFIED_TOKEN = TEST_UNIFIED_TOKEN
-  })
-
-  afterEach(() => {
-    process.env = { ...originalEnv }
-  })
-
   test('accepts request with correct token', async () => {
     const authMiddleware = await loadMiddleware()
     const { req, res } = mockReqRes(`Bearer ${TEST_UNIFIED_TOKEN}`)
@@ -146,41 +80,6 @@ describe('authMiddleware with UNIFIED_TOKEN verification', () => {
     expect(res._status).toBe(401)
     expect(res._body.error).toBe('Invalid token')
     expect(next).not.toHaveBeenCalled()
-  })
-
-  test('rejects request without Authorization header when UNIFIED_TOKEN is set', async () => {
-    const authMiddleware = await loadMiddleware()
-    const { req, res } = mockReqRes(null)
-    const next = vi.fn()
-
-    authMiddleware(req, res, next)
-
-    expect(res._status).toBe(401)
-    expect(res._body.error).toContain('Missing Authorization header')
-    expect(next).not.toHaveBeenCalled()
-  })
-
-  test('sets _passthroughToken for passthrough service with valid token', async () => {
-    const authMiddleware = await loadMiddleware()
-    const { req, res } = mockReqRes(`Bearer ${TEST_UNIFIED_TOKEN}`, { name: 'test', api_key: '' })
-    const next = vi.fn()
-
-    authMiddleware(req, res, next)
-
-    expect(next).toHaveBeenCalled()
-    expect(req._passthroughToken).toBe(TEST_UNIFIED_TOKEN)
-  })
-
-  test('skips token verification when UNIFIED_TOKEN is not set', async () => {
-    delete process.env.UNIFIED_TOKEN
-    const authMiddleware = await loadMiddleware()
-    const { req, res } = mockReqRes('Bearer plain-token')
-    const next = vi.fn()
-
-    authMiddleware(req, res, next)
-
-    expect(next).toHaveBeenCalled()
-    expect(res._status).toBeNull()
   })
 
   test('rejects token with same prefix but different length', async () => {

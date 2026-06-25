@@ -2,7 +2,7 @@
  * Load multi-service config from config.js.
  *
  * Returns an array of route objects:
- *   { name, remote_api_url, messages_endpoint, auth_type, api_key }
+ *   { name, remote_api_url, auth_type, api_key }
  */
 
 import { readFileSync, existsSync } from 'node:fs'
@@ -21,24 +21,25 @@ export function loadConfig () {
 
   const content = readFileSync(configPath, 'utf-8')
 
-  // Parse config.js — supports both `export default { ... }` and `module.exports = { ... }`
+  // Extract object from `export default { ... }` or `module.exports = { ... }`
+  let body
+  const esmMatch = content.match(/export\s+default\s+([\s\S]+)/)
+  if (esmMatch) {
+    body = esmMatch[1].replace(/;?\s*$/, '')
+  } else {
+    const cjsMatch = content.match(/module\.exports\s*=\s*([\s\S]+)/)
+    if (cjsMatch) {
+      body = cjsMatch[1].replace(/;?\s*$/, '')
+    } else {
+      throw new Error("Could not parse config.js — expected 'export default { ... }' or 'module.exports = { ... }'")
+    }
+  }
+
+  // Pass `process` so config.js can reference process.env.X
   let cfg
   try {
-    // Try ESM-style: extract the object after `export default`
-    const match = content.match(/export\s+default\s+(\{[\s\S]*\})/)
-    if (match) {
-      cfg = new Function(`return ${match[1]}`)() // eslint-disable-line no-new-func
-    } else {
-      // Try CommonJS-style: extract the object after `module.exports =`
-      const cjsMatch = content.match(/module\.exports\s*=\s*(\{[\s\S]*\})/)
-      if (cjsMatch) {
-        cfg = new Function(`return ${cjsMatch[1]}`)() // eslint-disable-line no-new-func
-      } else {
-        throw new Error("Could not parse config.js — expected 'export default { ... }' or 'module.exports = { ... }'")
-      }
-    }
+    cfg = new Function('process', `return (${body})`)(process) // eslint-disable-line no-new-func
   } catch (err) {
-    if (err.message.startsWith('Could not parse')) throw err
     throw new Error(`Failed to parse config.js: ${err.message}`)
   }
 

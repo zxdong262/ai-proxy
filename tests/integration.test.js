@@ -6,7 +6,10 @@
 import { describe, test, expect, beforeAll } from 'vitest'
 import request from 'supertest'
 
-const AUTH_HEADER = 'Bearer test-token-for-proxy'
+// Set UNIFIED_TOKEN for tests
+process.env.UNIFIED_TOKEN = 'test-unified-token-for-integration'
+
+const AUTH_HEADER = `Bearer ${process.env.UNIFIED_TOKEN}`
 // Use a cheap, fast model that exists on the remote API
 const TEST_MODEL = 'deepseek-ai/deepseek-v4-flash'
 

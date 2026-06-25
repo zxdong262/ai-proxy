@@ -1,17 +1,10 @@
 /**
  * Authentication middleware.
  *
- * The Anthropic CLI sends requests with:
- *   Authorization: Bearer <ANTHROPIC_AUTH_TOKEN>
+ * Validates client requests against UNIFIED_TOKEN (validated at startup).
+ * Uses constant-time comparison to prevent timing attacks.
  *
- * When the service has an api_key configured: accepts any bearer token from the
- * client, and uses the service's api_key to authenticate with the upstream.
- *
- * When the service has no api_key (passthrough mode): forwards the client's
- * Authorization header directly to the upstream remote service.
- *
- * When UNIFIED_TOKEN is set: compares the bearer token against it using
- * constant-time comparison to prevent timing attacks.
+ * The real provider API keys stay on the server and are never exposed to clients.
  */
 
 import { timingSafeEqual } from 'node:crypto'
@@ -25,31 +18,38 @@ function safeCompare (a, b) {
 }
 
 export function authMiddleware (req, res, next) {
+  // Support both Authorization: Bearer <token> and x-api-key: <token>
   const authHeader = req.headers.authorization
-  if (!authHeader) {
-    return res.status(401).json({ error: 'Missing Authorization header' })
-  }
+  const xApiKey = req.headers['x-api-key']
 
-  const [scheme, token] = authHeader.split(' ')
-  if (scheme !== 'Bearer' || !token) {
-    return res
-      .status(401)
-      .json({ error: 'Invalid Authorization format. Expected "Bearer <token>"' })
-  }
+  console.log(`[auth] ${req.method} ${req.originalUrl}`)
+  console.log(`[auth] x-api-key: ${xApiKey ? xApiKey.slice(0, 8) + '...' : 'none'}`)
+  console.log(`[auth] authorization: ${authHeader ? authHeader.slice(0, 20) + '...' : 'none'}`)
 
-  // When UNIFIED_TOKEN is set, verify the token with constant-time comparison.
-  const unifiedToken = process.env.UNIFIED_TOKEN
-  if (unifiedToken) {
-    if (!safeCompare(token, unifiedToken)) {
-      return res.status(401).json({ error: 'Invalid token' })
+  let token
+
+  if (xApiKey) {
+    // Claude/Anthropic SDK style: x-api-key header
+    token = xApiKey
+  } else if (authHeader) {
+    const [scheme, t] = authHeader.split(' ')
+    if (scheme !== 'Bearer' || !t) {
+      console.log(`[auth] REJECT: bad Authorization format`)
+      return res
+        .status(401)
+        .json({ error: 'Invalid Authorization format. Expected "Bearer <token>"' })
     }
+    token = t
+  } else {
+    console.log(`[auth] REJECT: no auth header`)
+    return res.status(401).json({ error: 'Missing Authorization header (use "Authorization: Bearer <token>" or "x-api-key: <token>")' })
   }
 
-  // When the service has no api_key configured, store the client's token for passthrough.
-  const serviceConfig = req._serviceConfig
-  if (!serviceConfig || !serviceConfig.api_key) {
-    req._passthroughToken = token
+  if (!safeCompare(token, process.env.UNIFIED_TOKEN)) {
+    console.log(`[auth] REJECT: token mismatch (got ${token.slice(0, 8)}...)`)
+    return res.status(401).json({ error: 'Invalid token' })
   }
 
+  console.log(`[auth] OK`)
   next()
 }

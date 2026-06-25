@@ -1,24 +1,26 @@
 # AI Proxy
 
-一个轻量级代理服务器，将 [Anthropic Messages API](https://docs.anthropic.com/en/api/messages) 请求转换为 [OpenAI Chat Completions API](https://platform.openai.com/docs/api-reference/chat) 格式，使你可以在期望 Anthropic API 的工具（如 Claude Code、Anthropic SDK）中使用任何兼容 OpenAI 的 LLM 服务商。
+一个统一的 LLM API 代理服务器。同时接受 [Anthropic Messages API](https://docs.anthropic.com/en/api/messages) 和 [OpenAI Chat Completions API](https://platform.openai.com/docs/api-reference/chat) 格式的请求，路由到任何兼容 OpenAI 或 Anthropic 的服务商。自动检测上游是否原生支持 Anthropic API，无需手动配置。
 
 [English](./README.md)
 
 ## 工作原理
 
 ```
-Anthropic 客户端  ──▶  AI Proxy  ──▶  任何兼容 OpenAI 的 API
-(Claude Code,         (本项目)          (OpenAI, DeepSeek, vLLM,
- Anthropic SDK,                        Ollama, LiteLLM 等)
- Claude CLI)
+客户端（Anthropic 或 OpenAI 格式）  ──▶  AI Proxy  ──▶  上游 LLM 服务商
+(Claude Code, Claude CLI,                (本项目)          (OpenAI, DeepSeek, vLLM,
+ Anthropic SDK, OpenAI SDK,                               Ollama, LiteLLM 等)
+ 任何兼容 OpenAI 的客户端)
 ```
 
-1. 客户端发送 Anthropic Messages API 请求（`POST /<name>/v1/messages`）
-2. 代理将请求转换为 OpenAI Chat Completions 格式
-3. 转发到该服务配置的远程 API
-4. 将响应转换回 Anthropic 格式（包括流式 SSE 事件）
+1. 客户端使用 `UNIFIED_TOKEN` 认证（服务商 API 密钥保留在服务器上）
+2. 客户端发送请求到 `/<name>/v1/messages`（Anthropic 格式）或 `/<name>/v1/chat/completions`（OpenAI 格式）
+3. 首次请求时，代理探测上游的 `/v1/messages` 端点以检测是否原生支持 Anthropic
+4. **如果上游支持 Anthropic**：直接代理 `/messages` 请求（无需转换）
+5. **如果上游仅支持 OpenAI**：将 Anthropic → OpenAI 格式转换后转发，再将响应转回 Anthropic 格式
+6. 所有 OpenAI 格式的请求（`/chat/completions`、`/models` 等）始终直接代理
 
-所有其他 `/<name>/v1/*` 请求（如 `GET /<name>/v1/models`）直接代理到远程 API。
+检测结果缓存在 `.capability-cache.json` 中，启动时加载。
 
 ## 快速开始
 
@@ -28,8 +30,10 @@ git clone https://github.com/zxdong262/ai-proxy.git && cd ai-proxy
 npm install
 
 # 配置
+cp sample.env .env
+# 编辑 .env 设置 UNIFIED_TOKEN
 cp config.sample.js config.js
-# 编辑 config.js 填入你的服务配置
+# 编辑 config.js 填入服务商 API 密钥
 
 # 启动
 npm start
@@ -38,6 +42,18 @@ npm start
 代理默认监听 `http://0.0.0.0:8088`。
 
 ## 配置
+
+### 环境变量
+
+| 变量 | 默认值 | 说明 |
+|---|---|---|
+| `HOST` | `0.0.0.0` | 服务器绑定地址 |
+| `PORT` | `8088` | 服务器端口 |
+| `UNIFIED_TOKEN` | **必填** | 客户端访问令牌。所有请求必须包含 `Authorization: Bearer <UNIFIED_TOKEN>`。 |
+
+通过 `.env` 文件或环境变量设置。
+
+### 服务配置
 
 从模板创建 `config.js`：
 
@@ -53,108 +69,57 @@ export default {
     {
       name: "openai",
       remote_api_url: "https://api.openai.com/v1",
-      messages_endpoint: "/chat/completions",
-      auth_type: "bearer",
       api_key: "sk-your-openai-key",
     },
     {
       name: "deepseek",
-      remote_api_url: "https://api.deepseek.com/v1",
-      messages_endpoint: "/chat/completions",
-      auth_type: "bearer",
-      api_key: "",  // 空 = 透传模式
+      remote_api_url: "https://api.deepseek.com",
+      api_key: "sk-your-deepseek-key",
+    },
+    {
+      name: "azure",
+      remote_api_url: "https://your-resource.openai.azure.com/openai/deployments/your-deployment",
+      auth_type: "api-key",
+      api_key: "your-azure-api-key",
     },
   ],
 };
 ```
 
-每个服务暴露在 `/<name>/v1/messages` 和 `/<name>/v1/*`：
+每个服务暴露在 `/<name>/v1/*`：
 
-| 服务 | 消息端点 | 模型端点 |
+| 服务 | Anthropic 端点 | OpenAI 端点 |
 |---|---|---|
-| `openai` | `POST /openai/v1/messages` | `GET /openai/v1/models` |
-| `deepseek` | `POST /deepseek/v1/messages` | `GET /deepseek/v1/models` |
+| `openai` | `POST /openai/v1/messages` | `POST /openai/v1/chat/completions` |
+| `deepseek` | `POST /deepseek/v1/messages` | `POST /deepseek/v1/chat/completions` |
 
 ### 路由字段
 
 | 字段 | 必填 | 说明 |
 |---|---|---|
 | `name` | 是 | 路由名称，用作 URL 前缀（如 `openai` → `/openai/v1/*`） |
-| `remote_api_url` | 是 | OpenAI 兼容 API 的基础 URL |
-| `messages_endpoint` | 否 | 聊天补全路径（默认：`/chat/completions`） |
-| `auth_type` | 否 | 认证类型（默认：`bearer`） |
-| `api_key` | 否 | API 密钥。为空或省略时运行在透传模式。 |
-
-### 环境变量
-
-| 变量 | 默认值 | 说明 |
-|---|---|---|
-| `HOST` | `0.0.0.0` | 服务器绑定地址 |
-| `PORT` | `8088` | 服务器端口 |
-| `UNIFIED_TOKEN` | *(可选)* | API 访问令牌。设置后，客户端必须在 `Authorization: Bearer <token>` 头中发送此令牌。 |
-
-通过 `.env` 文件或环境变量设置。
+| `remote_api_url` | 是 | 远程 API 的基础 URL |
+| `api_key` | 是 | 远程服务商的 API 密钥 |
+| `auth_type` | 否 | 认证类型：`'bearer'`（默认）或 `'api-key'`。对使用 `api-key` 头的服务商（如 Azure OpenAI）使用 `'api-key'`。 |
 
 ### 支持的服务商
 
-支持任何兼容 OpenAI 的服务商：
+支持任何兼容 OpenAI 或 Anthropic API 的服务商：
 
 - **OpenAI**: `https://api.openai.com/v1`
-- **DeepSeek**: `https://api.deepseek.com/v1`
+- **DeepSeek**: `https://api.deepseek.com`（原生 Anthropic 支持，自动检测）
+- **Azure OpenAI**: 使用 `auth_type: 'api-key'`
 - **Ollama**（本地）: `http://localhost:11434/v1`
 - **vLLM**（本地）: `http://localhost:8000/v1`
 - **LiteLLM**: `http://localhost:4000/v1`
 - **Together AI**: `https://api.together.xyz/v1`
 - **Groq**: `https://api.groq.com/openai/v1`
 
-## 认证模式
-
-每个服务支持两种认证模式：
-
-### API 密钥
-
-在路由配置中设置 `api_key`。代理使用此密钥与远程服务认证。客户端的 `Authorization` 头会被接受但不会转发。
-
-### 透传模式（不设置 api_key）
-
-当 `api_key` 为空或省略时，代理运行在透传模式。客户端的 `Authorization` 头会直接转发到远程服务。
-
-适用场景：
-- 你想通过 Claude CLI 使用 `ANTHROPIC_AUTH_TOKEN` 直接连接到远程兼容 Anthropic 的服务
-- 你不想在代理服务器上存储 API 密钥
-- 你希望每个客户端独立与上游服务认证
-
-**重要提示：** 使用透传模式时，请确保你的远程服务支持请求中的 `Authorization` 头，并且与 Anthropic API 兼容。
-
-### 公共部署安全
-
-当部署到公共服务器时，设置 `UNIFIED_TOKEN` 环境变量，要求所有路由使用令牌认证。这可以防止对代理的未授权访问。
-
-**工作原理：**
-
-1. 在 `.env` 中设置 `UNIFIED_TOKEN` 为一个强随机字符串
-2. 客户端必须在 `Authorization: Bearer <token>` 头中发送此令牌
-3. 无效或缺少令牌的请求将被拒绝，返回 `401`
-4. 使用常量时间比较防止时序攻击
-
-**Claude Code 示例：**
-
-```bash
-export ANTHROPIC_AUTH_TOKEN=your-unified-token
-export ANTHROPIC_BASE_URL=http://your-server:8088/openai
-
-claude
-```
-
-当 `UNIFIED_TOKEN` 未设置时，令牌验证将被跳过，代理接受任何 Bearer 令牌。
-
 ## 配合 Claude Code 使用
-
-将 Claude Code 指向特定服务：
 
 ```bash
 export ANTHROPIC_BASE_URL=http://localhost:8088/openai
-export ANTHROPIC_AUTH_TOKEN=your-token
+export ANTHROPIC_AUTH_TOKEN=your-unified-token
 
 claude
 ```
@@ -163,7 +128,10 @@ claude
 
 ```json
 {
-  "apiBaseUrl": "http://localhost:8088/openai"
+  "env": {
+    "ANTHROPIC_BASE_URL": "http://localhost:8088/openai",
+    "ANTHROPIC_AUTH_TOKEN": "your-unified-token"
+  }
 }
 ```
 
@@ -189,13 +157,17 @@ npm run pm2:logs
 
 ### `POST /<name>/v1/messages`
 
-接受 [Anthropic Messages API](https://docs.anthropic.com/en/api/messages) 格式。支持：
+接受 [Anthropic Messages API](https://docs.anthropic.com/en/api/messages) 格式。自动检测上游是否原生支持 Anthropic 或需要 OpenAI 转换。支持：
 
 - 非流式和流式（`stream: true`）
-- 系统提示词（转换为 OpenAI system 消息）
+- 系统提示词（需要时转换为 OpenAI system 消息）
 - 多模态内容（文本 + 图片）
-- 工具调用（双向转换）
+- 工具调用（需要时双向转换）
 - 参数：`model`、`max_tokens`、`temperature`、`top_p`、`stop_sequences`
+
+### `POST /<name>/v1/chat/completions`
+
+接受 [OpenAI Chat Completions API](https://platform.openai.com/docs/api-reference/chat) 格式。直接代理到上游，无需转换。
 
 ### `GET /<name>/v1/models`（及其他 `/<name>/v1/*` 端点）
 

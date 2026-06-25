@@ -1,24 +1,26 @@
 # AI Proxy
 
-A lightweight proxy that translates [Anthropic Messages API](https://docs.anthropic.com/en/api/messages) requests into [OpenAI Chat Completions API](https://platform.openai.com/docs/api-reference/chat) format, allowing you to use any OpenAI-compatible LLM provider with tools that expect the Anthropic API (e.g. Claude Code, Anthropic SDKs).
+A unified API proxy for LLM providers. Accepts both [Anthropic Messages API](https://docs.anthropic.com/en/api/messages) and [OpenAI Chat Completions API](https://platform.openai.com/docs/api-reference/chat) requests, and routes them to any OpenAI or Anthropic-compatible provider. Auto-detects whether the upstream supports Anthropic natively or needs OpenAI conversion.
 
 [中文文档](./README_CN.md)
 
 ## How It Works
 
 ```
-Anthropic Client  ──▶  AI Proxy  ──▶  Any OpenAI-compatible API
-(Claude Code,         (this repo)      (OpenAI, DeepSeek, vLLM,
- Anthropic SDK,                        Ollama, LiteLLM, etc.)
- Claude CLI)
+Client (Anthropic or OpenAI format)  ──▶  AI Proxy  ──▶  Upstream LLM Provider
+(Claude Code, Claude CLI,                (this repo)      (OpenAI, DeepSeek, vLLM,
+ Anthropic SDK, OpenAI SDK,                               Ollama, LiteLLM, etc.)
+ any OpenAI-compatible client)
 ```
 
-1. Client sends an Anthropic Messages API request (`POST /<name>/v1/messages`)
-2. Proxy converts the request to OpenAI Chat Completions format
-3. Forwards to the configured remote API for that service
-4. Converts the response back to Anthropic format (including streaming SSE events)
+1. Client authenticates with `UNIFIED_TOKEN` (provider API keys stay on the server)
+2. Client sends a request to `/<name>/v1/messages` (Anthropic format) or `/<name>/v1/chat/completions` (OpenAI format)
+3. On first request, the proxy probes the upstream `/v1/messages` endpoint to detect native Anthropic support
+4. **If upstream supports Anthropic**: proxies `/messages` requests directly (no conversion)
+5. **If upstream is OpenAI-only**: converts Anthropic → OpenAI format, forwards, and converts the response back
+6. All OpenAI-format requests (`/chat/completions`, `/models`, etc.) are always proxied directly
 
-All other `/<name>/v1/*` requests (e.g. `GET /<name>/v1/models`) are proxied directly to the remote API.
+The detection result is cached in `.capability-cache.json` and loaded on startup.
 
 ## Quick Start
 
@@ -28,8 +30,10 @@ git clone https://github.com/zxdong262/ai-proxy.git && cd ai-proxy
 npm install
 
 # Configure
+cp sample.env .env
+# Edit .env and set UNIFIED_TOKEN
 cp config.sample.js config.js
-# Edit config.js with your services
+# Edit config.js with your provider API keys
 
 # Run
 npm start
@@ -38,6 +42,18 @@ npm start
 The proxy starts on `http://0.0.0.0:8088` by default.
 
 ## Configuration
+
+### Environment Variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `HOST` | `0.0.0.0` | Server bind address |
+| `PORT` | `8088` | Server port |
+| `UNIFIED_TOKEN` | **required** | Client access token. All requests must include `Authorization: Bearer <UNIFIED_TOKEN>`. |
+
+Set these in a `.env` file or as environment variables.
+
+### Service Config
 
 Create `config.js` from the template:
 
@@ -53,108 +69,57 @@ export default {
     {
       name: "openai",
       remote_api_url: "https://api.openai.com/v1",
-      messages_endpoint: "/chat/completions",
-      auth_type: "bearer",
       api_key: "sk-your-openai-key",
     },
     {
       name: "deepseek",
-      remote_api_url: "https://api.deepseek.com/v1",
-      messages_endpoint: "/chat/completions",
-      auth_type: "bearer",
-      api_key: "",  // empty = passthrough mode
+      remote_api_url: "https://api.deepseek.com",
+      api_key: "sk-your-deepseek-key",
+    },
+    {
+      name: "azure",
+      remote_api_url: "https://your-resource.openai.azure.com/openai/deployments/your-deployment",
+      auth_type: "api-key",
+      api_key: "your-azure-api-key",
     },
   ],
 };
 ```
 
-Each service is exposed at `/<name>/v1/messages` and `/<name>/v1/*`:
+Each service is exposed at `/<name>/v1/*`:
 
-| Service | Messages Endpoint | Models Endpoint |
+| Service | Anthropic Endpoint | OpenAI Endpoint |
 |---|---|---|
-| `openai` | `POST /openai/v1/messages` | `GET /openai/v1/models` |
-| `deepseek` | `POST /deepseek/v1/messages` | `GET /deepseek/v1/models` |
+| `openai` | `POST /openai/v1/messages` | `POST /openai/v1/chat/completions` |
+| `deepseek` | `POST /deepseek/v1/messages` | `POST /deepseek/v1/chat/completions` |
 
 ### Route Fields
 
 | Field | Required | Description |
 |---|---|---|
 | `name` | Yes | Route name, used as URL prefix (e.g. `openai` → `/openai/v1/*`) |
-| `remote_api_url` | Yes | Base URL of the OpenAI-compatible API |
-| `messages_endpoint` | No | Path for chat completions (default: `/chat/completions`) |
-| `auth_type` | No | Authentication type (default: `bearer`) |
-| `api_key` | No | API key. When empty or omitted, runs in passthrough mode. |
-
-### Environment Variables
-
-| Variable | Default | Description |
-|---|---|---|
-| `HOST` | `0.0.0.0` | Server bind address |
-| `PORT` | `8088` | Server port |
-| `UNIFIED_TOKEN` | *(optional)* | API access token. When set, clients must send this token in `Authorization: Bearer <token>`. |
-
-Set these in a `.env` file or as environment variables.
+| `remote_api_url` | Yes | Base URL of the remote API |
+| `api_key` | Yes | API key for the remote provider |
+| `auth_type` | No | Authentication type: `'bearer'` (default) or `'api-key'`. Use `'api-key'` for providers that use an `api-key` header (e.g. Azure OpenAI). |
 
 ### Supported Providers
 
-Works with any OpenAI-compatible provider:
+Works with any provider that supports the OpenAI or Anthropic API:
 
 - **OpenAI**: `https://api.openai.com/v1`
-- **DeepSeek**: `https://api.deepseek.com/v1`
+- **DeepSeek**: `https://api.deepseek.com` (native Anthropic support, auto-detected)
+- **Azure OpenAI**: use `auth_type: 'api-key'`
 - **Ollama** (local): `http://localhost:11434/v1`
 - **vLLM** (local): `http://localhost:8000/v1`
 - **LiteLLM**: `http://localhost:4000/v1`
 - **Together AI**: `https://api.together.xyz/v1`
 - **Groq**: `https://api.groq.com/openai/v1`
 
-## Auth Modes
-
-Each service supports two authentication modes:
-
-### API Key
-
-Set `api_key` in the route config. The proxy uses this key to authenticate with the remote service. The client's `Authorization` header is accepted but not forwarded.
-
-### Passthrough (no api_key)
-
-When `api_key` is empty or omitted, the proxy runs in passthrough mode. The client's `Authorization` header is forwarded directly to the remote service.
-
-This is useful when:
-- You want to use Claude CLI with `ANTHROPIC_AUTH_TOKEN` pointing directly at a remote Anthropic-compatible service
-- You don't want to store API keys on the proxy server
-- You want each client to authenticate independently with the upstream service
-
-**Important:** When using passthrough mode, make sure your remote service supports the `Authorization` header from the request and is compatible with the Anthropic API.
-
-### Public Deployment Security
-
-When deploying to a public server, set the `UNIFIED_TOKEN` environment variable to require token authentication on all routes. This prevents unauthorized access to your proxy.
-
-**How it works:**
-
-1. Set `UNIFIED_TOKEN` in your `.env` to a strong random string
-2. Clients must send the token in the `Authorization: Bearer <token>` header
-3. Requests with invalid or missing tokens are rejected with `401`
-4. Uses constant-time comparison to prevent timing attacks
-
-**Claude Code example:**
-
-```bash
-export ANTHROPIC_AUTH_TOKEN=your-unified-token
-export ANTHROPIC_BASE_URL=http://your-server:8088/openai
-
-claude
-```
-
-When `UNIFIED_TOKEN` is not set, token verification is skipped and the proxy accepts any Bearer token.
-
 ## Usage with Claude Code
-
-Point Claude Code at a specific service:
 
 ```bash
 export ANTHROPIC_BASE_URL=http://localhost:8088/openai
-export ANTHROPIC_AUTH_TOKEN=your-token
+export ANTHROPIC_AUTH_TOKEN=your-unified-token
 
 claude
 ```
@@ -163,7 +128,10 @@ Or in your Claude Code settings:
 
 ```json
 {
-  "apiBaseUrl": "http://localhost:8088/openai"
+  "env": {
+    "ANTHROPIC_BASE_URL": "http://localhost:8088/openai",
+    "ANTHROPIC_AUTH_TOKEN": "your-unified-token"
+  }
 }
 ```
 
@@ -189,13 +157,17 @@ Logs are written to `logs/error.log` and `logs/out.log`.
 
 ### `POST /<name>/v1/messages`
 
-Accepts [Anthropic Messages API](https://docs.anthropic.com/en/api/messages) format. Supports:
+Accepts [Anthropic Messages API](https://docs.anthropic.com/en/api/messages) format. Auto-detects whether the upstream supports Anthropic natively or requires OpenAI conversion. Supports:
 
 - Non-streaming and streaming (`stream: true`)
-- System prompts (converted to OpenAI system messages)
+- System prompts (converted to OpenAI system messages when needed)
 - Multimodal content (text + images)
-- Tool use (converted bidirectionally)
+- Tool use (converted bidirectionally when needed)
 - Parameters: `model`, `max_tokens`, `temperature`, `top_p`, `stop_sequences`
+
+### `POST /<name>/v1/chat/completions`
+
+Accepts [OpenAI Chat Completions API](https://platform.openai.com/docs/api-reference/chat) format. Proxied directly to the upstream with no conversion.
 
 ### `GET /<name>/v1/models` (and other `/<name>/v1/*` endpoints)
 

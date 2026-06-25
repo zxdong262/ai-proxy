@@ -9,6 +9,7 @@
     "test": "vitest run",
     "test:unit": "vitest run tests/converter.test.js tests/auth.test.js tests/multi-service.test.js",
     "test:integration": "vitest run tests/integration.test.js",
+    "test:env-config": "vitest run tests/env-config.test.js",
     "fix": "standard --fix",
     "lint": "standard",
     "pm2:start": "pm2 start ecosystem.config.cjs",
@@ -43,6 +44,7 @@
   },
   "dependencies": {
     "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "pug": "^3.0.4"
   },

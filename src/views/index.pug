@@ -52,7 +52,6 @@ html(lang="en")
             tr
               th Name
               th Remote API
-              th Endpoint
               th Auth
           tbody
             each route in routes
@@ -60,7 +59,6 @@ html(lang="en")
                 td
                   strong= route.name
                 td= route.remote_api_url
-                td= route.messages_endpoint || '/chat/completions'
                 td
                   if route.api_key
                     span.badge.badge-key API Key

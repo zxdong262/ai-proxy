@@ -75,6 +75,9 @@ typings/
 # Multi-service config (user-created, contains API keys)
 /config.js
 
+# Capability detection cache
+.capability-cache.json
+
 # parcel-bundler cache (https://parceljs.org/)
 .cache
 
