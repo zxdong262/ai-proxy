@@ -1,5 +1,10 @@
 /**
  * Converts between Anthropic Messages API and OpenAI Chat Completions API formats.
+ *
+ * Two directions:
+ *   - Anthropic → OpenAI: anthropicToOpenAI, openAIToAnthropic, openAIChunkToAnthropicEvents
+ *   - OpenAI → Anthropic: openAIToAnthropicRequest, anthropicToOpenAIResponse,
+ *                          anthropicStreamToOpenAIChunks
  */
 
 /**
@@ -434,4 +439,320 @@ export function openAIChunkToAnthropicEvents (chunk, state) {
   }
 
   return events
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Reverse direction: OpenAI → Anthropic (for Anthropic-native providers)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Convert an OpenAI chat message to one or more Anthropic messages.
+ * Handles tool_calls (assistant) and tool role messages.
+ */
+function convertOpenAIMessage (msg) {
+  // Tool role → Anthropic user message with tool_result content blocks
+  if (msg.role === 'tool') {
+    return [{
+      role: 'user',
+      content: [{
+        type: 'tool_result',
+        tool_use_id: msg.tool_call_id,
+        content: msg.content || ''
+      }]
+    }]
+  }
+
+  // Assistant with tool_calls → Anthropic assistant with tool_use blocks
+  if (msg.role === 'assistant' && msg.tool_calls) {
+    const content = []
+    if (msg.content) {
+      content.push({ type: 'text', text: msg.content })
+    }
+    for (const tc of msg.tool_calls) {
+      let input = {}
+      try {
+        input = JSON.parse(tc.function.arguments)
+      } catch {
+        input = { raw: tc.function.arguments }
+      }
+      content.push({
+        type: 'tool_use',
+        id: tc.id,
+        name: tc.function.name,
+        input
+      })
+    }
+    return [{ role: 'assistant', content }]
+  }
+
+  // Regular message — pass through content
+  return [{ role: msg.role, content: msg.content || '' }]
+}
+
+/**
+ * Convert an OpenAI tool definition to Anthropic format.
+ * OpenAI:    { type: "function", function: { name, description, parameters } }
+ * Anthropic: { name, description, input_schema }
+ */
+function convertOpenAITools (tools) {
+  if (!tools || !tools.length) return undefined
+  return tools.map((tool) => ({
+    name: tool.function.name,
+    description: tool.function.description || '',
+    input_schema: tool.function.parameters || { type: 'object', properties: {} }
+  }))
+}
+
+/**
+ * Convert OpenAI tool_choice to Anthropic tool_choice.
+ * OpenAI:    "auto" | "required" | { type: "function", function: { name } }
+ * Anthropic: { type: "auto" | "any" | "tool", name? }
+ */
+function convertOpenAIToolChoice (toolChoice) {
+  if (!toolChoice) return undefined
+  if (toolChoice === 'auto') return { type: 'auto' }
+  if (toolChoice === 'required') return { type: 'any' }
+  if (toolChoice.type === 'function' && toolChoice.function?.name) {
+    return { type: 'tool', name: toolChoice.function.name }
+  }
+  return { type: 'auto' }
+}
+
+/**
+ * Map OpenAI finish_reason to Anthropic stop_reason.
+ */
+function mapFinishReason (finishReason) {
+  const map = {
+    stop: 'end_turn',
+    length: 'max_tokens',
+    tool_calls: 'tool_use',
+    content_filter: 'end_turn'
+  }
+  return map[finishReason] || 'end_turn'
+}
+
+/**
+ * Convert an OpenAI chat completions request to Anthropic messages format.
+ *
+ * OpenAI:    { model, max_tokens, messages: [{role, content}], tools, tool_choice, stream, ... }
+ * Anthropic: { model, max_tokens, system?, messages: [{role, content}], tools, tool_choice, stream, ... }
+ */
+export function openAIToAnthropicRequest (body) {
+  const messages = []
+  let system
+
+  for (const msg of body.messages || []) {
+    if (msg.role === 'system') {
+      // OpenAI system message → Anthropic top-level system field
+      system = msg.content
+    } else {
+      messages.push(...convertOpenAIMessage(msg))
+    }
+  }
+
+  const anthropic = {
+    model: body.model,
+    max_tokens: body.max_tokens || 4096,
+    messages
+  }
+
+  if (system) anthropic.system = system
+  if (body.stream) anthropic.stream = true
+  if (body.temperature !== undefined) anthropic.temperature = body.temperature
+  if (body.top_p !== undefined) anthropic.top_p = body.top_p
+  if (body.stop) anthropic.stop_sequences = Array.isArray(body.stop) ? body.stop : [body.stop]
+
+  const tools = convertOpenAITools(body.tools)
+  if (tools) {
+    anthropic.tools = tools
+    const toolChoice = convertOpenAIToolChoice(body.tool_choice)
+    if (toolChoice) anthropic.tool_choice = toolChoice
+  }
+
+  return anthropic
+}
+
+/**
+ * Convert an Anthropic messages response to OpenAI chat completions format.
+ *
+ * Anthropic: { id, type, role, content: [{type, text|tool_use, ...}], model, stop_reason, usage }
+ * OpenAI:    { id, object, choices: [{message: {role, content, tool_calls}, finish_reason}], usage, model }
+ */
+export function anthropicToOpenAIResponse (anthropicRes, requestModel) {
+  const content = anthropicRes.content || []
+  const textParts = content.filter((b) => b.type === 'text')
+  const toolUseBlocks = content.filter((b) => b.type === 'tool_use')
+
+  const text = textParts.map((b) => b.text).join('')
+
+  const message = {
+    role: 'assistant',
+    content: text || null
+  }
+
+  if (toolUseBlocks.length > 0) {
+    message.tool_calls = toolUseBlocks.map((block) => ({
+      id: block.id,
+      type: 'function',
+      function: {
+        name: block.name,
+        arguments: JSON.stringify(block.input || {})
+      }
+    }))
+  }
+
+  // Map Anthropic stop_reason → OpenAI finish_reason
+  const stopReasonMap = {
+    end_turn: 'stop',
+    max_tokens: 'length',
+    tool_use: 'tool_calls'
+  }
+
+  return {
+    id: anthropicRes.id || `chatcmpl-${generateId()}`,
+    object: 'chat.completion',
+    created: Math.floor(Date.now() / 1000),
+    model: anthropicRes.model || requestModel,
+    choices: [
+      {
+        index: 0,
+        message,
+        finish_reason: stopReasonMap[anthropicRes.stop_reason] || 'stop'
+      }
+    ],
+    usage: {
+      prompt_tokens: anthropicRes.usage?.input_tokens || 0,
+      completion_tokens: anthropicRes.usage?.output_tokens || 0,
+      total_tokens:
+        (anthropicRes.usage?.input_tokens || 0) +
+        (anthropicRes.usage?.output_tokens || 0)
+    }
+  }
+}
+
+/**
+ * Convert a single Anthropic SSE event into zero or more OpenAI streaming chunks.
+ *
+ * Returns an array of OpenAI-compatible chunk objects.
+ */
+export function anthropicStreamToOpenAIEvents (eventType, eventData, state) {
+  const chunks = []
+
+  if (eventType === 'message_start') {
+    state.started = true
+    state.toolCalls = {}
+    state.toolCallIndex = 0
+    state.message = eventData.message
+
+    chunks.push({
+      id: eventData.message.id || `chatcmpl-${generateId()}`,
+      object: 'chat.completion.chunk',
+      created: Math.floor(Date.now() / 1000),
+      model: eventData.message.model || state.model,
+      choices: [
+        {
+          index: 0,
+          delta: { role: 'assistant', content: '' },
+          finish_reason: null
+        }
+      ]
+    })
+  } else if (eventType === 'content_block_delta') {
+    if (eventData.delta?.type === 'text_delta') {
+      chunks.push({
+        id: state.message?.id || `chatcmpl-${generateId()}`,
+        object: 'chat.completion.chunk',
+        created: Math.floor(Date.now() / 1000),
+        model: state.message?.model || state.model,
+        choices: [
+          {
+            index: 0,
+            delta: { content: eventData.delta.text },
+            finish_reason: null
+          }
+        ]
+      })
+    } else if (eventData.delta?.type === 'input_json_delta') {
+      const idx = eventData.index
+      if (state.toolCalls[idx]) {
+        chunks.push({
+          id: state.message?.id || `chatcmpl-${generateId()}`,
+          object: 'chat.completion.chunk',
+          created: Math.floor(Date.now() / 1000),
+          model: state.message?.model || state.model,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                tool_calls: [
+                  {
+                    index: state.toolCalls[idx].openaiIndex,
+                    function: { arguments: eventData.delta.partial_json }
+                  }
+                ]
+              },
+              finish_reason: null
+            }
+          ]
+        })
+      }
+    }
+  } else if (eventType === 'content_block_start') {
+    if (eventData.content_block?.type === 'tool_use') {
+      const openaiIndex = state.toolCallIndex++
+      state.toolCalls[eventData.index] = {
+        id: eventData.content_block.id,
+        name: eventData.content_block.name,
+        openaiIndex
+      }
+
+      chunks.push({
+        id: state.message?.id || `chatcmpl-${generateId()}`,
+        object: 'chat.completion.chunk',
+        created: Math.floor(Date.now() / 1000),
+        model: state.message?.model || state.model,
+        choices: [
+          {
+            index: 0,
+            delta: {
+              tool_calls: [
+                {
+                  index: openaiIndex,
+                  id: eventData.content_block.id,
+                  type: 'function',
+                  function: {
+                    name: eventData.content_block.name,
+                    arguments: ''
+                  }
+                }
+              ]
+            },
+            finish_reason: null
+          }
+        ]
+      })
+    }
+  } else if (eventType === 'message_delta') {
+    const stopReasonMap = {
+      end_turn: 'stop',
+      max_tokens: 'length',
+      tool_use: 'tool_calls'
+    }
+    chunks.push({
+      id: state.message?.id || `chatcmpl-${generateId()}`,
+      object: 'chat.completion.chunk',
+      created: Math.floor(Date.now() / 1000),
+      model: eventData.delta?.model || state.message?.model || state.model,
+      choices: [
+        {
+          index: 0,
+          delta: {},
+          finish_reason: stopReasonMap[eventData.delta?.stop_reason] || 'stop'
+        }
+      ],
+      usage: eventData.usage
+    })
+  }
+
+  return chunks
 }

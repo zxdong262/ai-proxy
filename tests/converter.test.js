@@ -5,7 +5,10 @@ import {
   anthropicToOpenAI,
   mapStopReason,
   openAIToAnthropic,
-  openAIChunkToAnthropicEvents
+  openAIChunkToAnthropicEvents,
+  openAIToAnthropicRequest,
+  anthropicToOpenAIResponse,
+  anthropicStreamToOpenAIEvents
 } from '../src/converter.js'
 
 describe('extractText', () => {
@@ -431,5 +434,350 @@ describe('openAIChunkToAnthropicEvents', () => {
     expect(starts.length).toBe(2)
     expect(state.toolCallBlocks[0]).toBeDefined()
     expect(state.toolCallBlocks[1]).toBeDefined()
+  })
+})
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Reverse direction: OpenAI → Anthropic
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('openAIToAnthropicRequest', () => {
+  test('converts basic request', () => {
+    const body = {
+      model: 'gpt-4',
+      max_tokens: 100,
+      messages: [{ role: 'user', content: 'Hello' }]
+    }
+    const result = openAIToAnthropicRequest(body)
+    expect(result.model).toBe('gpt-4')
+    expect(result.max_tokens).toBe(100)
+    expect(result.messages).toHaveLength(1)
+    expect(result.messages[0]).toEqual({ role: 'user', content: 'Hello' })
+  })
+
+  test('converts system message to top-level system field', () => {
+    const body = {
+      model: 'gpt-4',
+      max_tokens: 100,
+      messages: [
+        { role: 'system', content: 'You are helpful' },
+        { role: 'user', content: 'Hello' }
+      ]
+    }
+    const result = openAIToAnthropicRequest(body)
+    expect(result.system).toBe('You are helpful')
+    expect(result.messages).toHaveLength(1)
+    expect(result.messages[0].role).toBe('user')
+  })
+
+  test('converts stream flag', () => {
+    const body = {
+      model: 'gpt-4',
+      max_tokens: 100,
+      stream: true,
+      messages: []
+    }
+    const result = openAIToAnthropicRequest(body)
+    expect(result.stream).toBe(true)
+  })
+
+  test('converts stop to stop_sequences', () => {
+    const body = {
+      model: 'gpt-4',
+      max_tokens: 100,
+      stop: ['END', 'STOP'],
+      messages: []
+    }
+    const result = openAIToAnthropicRequest(body)
+    expect(result.stop_sequences).toEqual(['END', 'STOP'])
+  })
+
+  test('converts single stop string to array', () => {
+    const body = {
+      model: 'gpt-4',
+      max_tokens: 100,
+      stop: 'END',
+      messages: []
+    }
+    const result = openAIToAnthropicRequest(body)
+    expect(result.stop_sequences).toEqual(['END'])
+  })
+
+  test('converts tools', () => {
+    const body = {
+      model: 'gpt-4',
+      max_tokens: 100,
+      messages: [],
+      tools: [
+        {
+          type: 'function',
+          function: {
+            name: 'get_weather',
+            description: 'Get weather',
+            parameters: { type: 'object', properties: { city: { type: 'string' } } }
+          }
+        }
+      ]
+    }
+    const result = openAIToAnthropicRequest(body)
+    expect(result.tools).toHaveLength(1)
+    expect(result.tools[0].name).toBe('get_weather')
+    expect(result.tools[0].input_schema.properties.city.type).toBe('string')
+  })
+
+  test('converts tool_choice auto', () => {
+    const body = {
+      model: 'gpt-4',
+      max_tokens: 100,
+      messages: [],
+      tools: [{ type: 'function', function: { name: 'test', parameters: {} } }],
+      tool_choice: 'auto'
+    }
+    const result = openAIToAnthropicRequest(body)
+    expect(result.tool_choice).toEqual({ type: 'auto' })
+  })
+
+  test('converts tool_choice required to any', () => {
+    const body = {
+      model: 'gpt-4',
+      max_tokens: 100,
+      messages: [],
+      tools: [{ type: 'function', function: { name: 'test', parameters: {} } }],
+      tool_choice: 'required'
+    }
+    const result = openAIToAnthropicRequest(body)
+    expect(result.tool_choice).toEqual({ type: 'any' })
+  })
+
+  test('converts tool_choice function to tool', () => {
+    const body = {
+      model: 'gpt-4',
+      max_tokens: 100,
+      messages: [],
+      tools: [{ type: 'function', function: { name: 'test', parameters: {} } }],
+      tool_choice: { type: 'function', function: { name: 'test' } }
+    }
+    const result = openAIToAnthropicRequest(body)
+    expect(result.tool_choice).toEqual({ type: 'tool', name: 'test' })
+  })
+
+  test('converts assistant message with tool_calls', () => {
+    const body = {
+      model: 'gpt-4',
+      max_tokens: 100,
+      messages: [
+        {
+          role: 'assistant',
+          content: 'Let me check',
+          tool_calls: [
+            {
+              id: 'call_1',
+              type: 'function',
+              function: { name: 'get_weather', arguments: '{"city":"NYC"}' }
+            }
+          ]
+        }
+      ]
+    }
+    const result = openAIToAnthropicRequest(body)
+    expect(result.messages[0].role).toBe('assistant')
+    expect(result.messages[0].content[0]).toEqual({ type: 'text', text: 'Let me check' })
+    expect(result.messages[0].content[1].type).toBe('tool_use')
+    expect(result.messages[0].content[1].name).toBe('get_weather')
+    expect(result.messages[0].content[1].input).toEqual({ city: 'NYC' })
+  })
+
+  test('converts tool role message', () => {
+    const body = {
+      model: 'gpt-4',
+      max_tokens: 100,
+      messages: [
+        {
+          role: 'tool',
+          tool_call_id: 'call_1',
+          content: '{"temp":72}'
+        }
+      ]
+    }
+    const result = openAIToAnthropicRequest(body)
+    expect(result.messages[0].role).toBe('user')
+    expect(result.messages[0].content[0].type).toBe('tool_result')
+    expect(result.messages[0].content[0].tool_use_id).toBe('call_1')
+    expect(result.messages[0].content[0].content).toBe('{"temp":72}')
+  })
+})
+
+describe('anthropicToOpenAIResponse', () => {
+  test('converts basic response', () => {
+    const anthropicRes = {
+      id: 'msg_123',
+      type: 'message',
+      role: 'assistant',
+      content: [{ type: 'text', text: 'Hello!' }],
+      model: 'claude-3',
+      stop_reason: 'end_turn',
+      usage: { input_tokens: 10, output_tokens: 5 }
+    }
+    const result = anthropicToOpenAIResponse(anthropicRes, 'gpt-4')
+    expect(result.object).toBe('chat.completion')
+    expect(result.choices[0].message.content).toBe('Hello!')
+    expect(result.choices[0].finish_reason).toBe('stop')
+    expect(result.usage.prompt_tokens).toBe(10)
+    expect(result.usage.completion_tokens).toBe(5)
+  })
+
+  test('converts tool_use response', () => {
+    const anthropicRes = {
+      id: 'msg_123',
+      type: 'message',
+      role: 'assistant',
+      content: [
+        { type: 'text', text: 'Let me check.' },
+        { type: 'tool_use', id: 'tu_1', name: 'get_weather', input: { city: 'NYC' } }
+      ],
+      model: 'claude-3',
+      stop_reason: 'tool_use',
+      usage: { input_tokens: 10, output_tokens: 15 }
+    }
+    const result = anthropicToOpenAIResponse(anthropicRes, 'gpt-4')
+    expect(result.choices[0].message.content).toBe('Let me check.')
+    expect(result.choices[0].message.tool_calls).toHaveLength(1)
+    expect(result.choices[0].message.tool_calls[0].id).toBe('tu_1')
+    expect(result.choices[0].message.tool_calls[0].function.name).toBe('get_weather')
+    expect(result.choices[0].finish_reason).toBe('tool_calls')
+  })
+
+  test('converts tool_use-only response (no text)', () => {
+    const anthropicRes = {
+      id: 'msg_123',
+      type: 'message',
+      role: 'assistant',
+      content: [
+        { type: 'tool_use', id: 'tu_1', name: 'do_thing', input: {} }
+      ],
+      model: 'claude-3',
+      stop_reason: 'tool_use',
+      usage: { input_tokens: 10, output_tokens: 5 }
+    }
+    const result = anthropicToOpenAIResponse(anthropicRes, 'gpt-4')
+    expect(result.choices[0].message.content).toBeNull()
+    expect(result.choices[0].message.tool_calls[0].function.name).toBe('do_thing')
+  })
+
+  test('maps max_tokens stop_reason', () => {
+    const anthropicRes = {
+      id: 'msg_123',
+      type: 'message',
+      role: 'assistant',
+      content: [{ type: 'text', text: 'truncated' }],
+      model: 'claude-3',
+      stop_reason: 'max_tokens',
+      usage: { input_tokens: 10, output_tokens: 100 }
+    }
+    const result = anthropicToOpenAIResponse(anthropicRes, 'gpt-4')
+    expect(result.choices[0].finish_reason).toBe('length')
+  })
+})
+
+describe('anthropicStreamToOpenAIEvents', () => {
+  test('message_start emits chunk with role', () => {
+    const state = { started: false, model: 'claude-3' }
+    const chunks = anthropicStreamToOpenAIEvents('message_start', {
+      message: { id: 'msg_123', model: 'claude-3', role: 'assistant', content: [] }
+    }, state)
+
+    expect(chunks).toHaveLength(1)
+    expect(chunks[0].choices[0].delta.role).toBe('assistant')
+    expect(chunks[0].choices[0].finish_reason).toBeNull()
+    expect(state.started).toBe(true)
+  })
+
+  test('text delta emits content chunk', () => {
+    const state = { started: true, message: { id: 'msg_123', model: 'claude-3' } }
+    const chunks = anthropicStreamToOpenAIEvents('content_block_delta', {
+      index: 0,
+      delta: { type: 'text_delta', text: 'Hello' }
+    }, state)
+
+    expect(chunks).toHaveLength(1)
+    expect(chunks[0].choices[0].delta.content).toBe('Hello')
+  })
+
+  test('tool_use content_block_start emits tool_calls chunk', () => {
+    const state = { started: true, message: { id: 'msg_123', model: 'claude-3' }, toolCalls: {}, toolCallIndex: 0 }
+    const chunks = anthropicStreamToOpenAIEvents('content_block_start', {
+      index: 1,
+      content_block: { type: 'tool_use', id: 'tu_1', name: 'get_weather' }
+    }, state)
+
+    expect(chunks).toHaveLength(1)
+    expect(chunks[0].choices[0].delta.tool_calls[0].id).toBe('tu_1')
+    expect(chunks[0].choices[0].delta.tool_calls[0].function.name).toBe('get_weather')
+    expect(state.toolCalls[1]).toBeDefined()
+    expect(state.toolCalls[1].openaiIndex).toBe(0)
+  })
+
+  test('input_json_delta emits arguments chunk', () => {
+    const state = {
+      started: true,
+      message: { id: 'msg_123', model: 'claude-3' },
+      toolCalls: { 1: { openaiIndex: 0, id: 'tu_1', name: 'get_weather' } }
+    }
+    const chunks = anthropicStreamToOpenAIEvents('content_block_delta', {
+      index: 1,
+      delta: { type: 'input_json_delta', partial_json: '{"city":"' }
+    }, state)
+
+    expect(chunks).toHaveLength(1)
+    expect(chunks[0].choices[0].delta.tool_calls[0].function.arguments).toBe('{"city":"')
+  })
+
+  test('message_delta with end_turn emits finish chunk', () => {
+    const state = { started: true, message: { id: 'msg_123', model: 'claude-3' } }
+    const chunks = anthropicStreamToOpenAIEvents('message_delta', {
+      delta: { stop_reason: 'end_turn' },
+      usage: { output_tokens: 10 }
+    }, state)
+
+    expect(chunks).toHaveLength(1)
+    expect(chunks[0].choices[0].finish_reason).toBe('stop')
+  })
+
+  test('message_delta with tool_use emits tool_calls finish', () => {
+    const state = { started: true, message: { id: 'msg_123', model: 'claude-3' } }
+    const chunks = anthropicStreamToOpenAIEvents('message_delta', {
+      delta: { stop_reason: 'tool_use' }
+    }, state)
+
+    expect(chunks[0].choices[0].finish_reason).toBe('tool_calls')
+  })
+
+  test('full streaming lifecycle', () => {
+    const state = { started: false, model: 'claude-3' }
+    const allChunks = []
+
+    // message_start
+    allChunks.push(...anthropicStreamToOpenAIEvents('message_start', {
+      message: { id: 'msg_123', model: 'claude-3', role: 'assistant', content: [] }
+    }, state))
+
+    // text
+    allChunks.push(...anthropicStreamToOpenAIEvents('content_block_delta', {
+      index: 0, delta: { type: 'text_delta', text: 'Hello ' }
+    }, state))
+
+    allChunks.push(...anthropicStreamToOpenAIEvents('content_block_delta', {
+      index: 0, delta: { type: 'text_delta', text: 'world' }
+    }, state))
+
+    // finish
+    allChunks.push(...anthropicStreamToOpenAIEvents('message_delta', {
+      delta: { stop_reason: 'end_turn' }
+    }, state))
+
+    expect(allChunks[0].choices[0].delta.role).toBe('assistant')
+    expect(allChunks[1].choices[0].delta.content).toBe('Hello ')
+    expect(allChunks[2].choices[0].delta.content).toBe('world')
+    expect(allChunks[3].choices[0].finish_reason).toBe('stop')
   })
 })

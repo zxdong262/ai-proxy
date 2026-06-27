@@ -12,58 +12,16 @@
 import { Router } from 'express'
 import https from 'node:https'
 import http from 'node:http'
-import { readFileSync, writeFileSync, existsSync } from 'node:fs'
-import { resolve, dirname } from 'node:path'
-import { fileURLToPath } from 'node:url'
 import {
   anthropicToOpenAI,
   openAIToAnthropic,
   openAIChunkToAnthropicEvents
 } from '../converter.js'
-
-const __dirname = dirname(fileURLToPath(import.meta.url))
-const CACHE_FILE = resolve(__dirname, '../../.capability-cache.json')
+import { ensureCapability, buildAuthHeaders } from '../capability.js'
 
 const router = Router()
 
-// Cache: serviceName → 'anthropic' | 'openai'
-const capabilityCache = loadCache()
-
-function loadCache () {
-  try {
-    if (existsSync(CACHE_FILE)) {
-      const data = JSON.parse(readFileSync(CACHE_FILE, 'utf-8'))
-      console.log(`[capability] loaded cache: ${Object.keys(data).length} entries`)
-      return data
-    }
-  } catch {
-    // ignore corrupted cache
-  }
-  return {}
-}
-
-function saveCache () {
-  try {
-    writeFileSync(CACHE_FILE, JSON.stringify(capabilityCache, null, 2))
-  } catch (err) {
-    console.error('[capability] failed to save cache:', err.message)
-  }
-}
-
-function setCapability (serviceName, format) {
-  capabilityCache[serviceName] = format
-  console.log(`[capability] ${serviceName}: detected as ${format}`)
-  saveCache()
-}
-
 // ─── HTTP helpers ──────────────────────────────────────────────────────────
-
-function buildAuthHeaders (apiKey, authType) {
-  if (authType === 'api-key') {
-    return { 'api-key': apiKey }
-  }
-  return { Authorization: `Bearer ${apiKey}` }
-}
 
 async function httpRequest (body, url, apiKey, authType) {
   const isHttps = url.protocol === 'https:'
@@ -108,41 +66,6 @@ function sendError (res, statusCode, message) {
     type: 'error',
     error: { type: 'api_error', message }
   })
-}
-
-// ─── Capability detection ──────────────────────────────────────────────────
-
-async function detectCapability (serviceConfig, apiKey, authType) {
-  const url = buildUrl(serviceConfig, '/v1/messages')
-  console.log(`[capability] probing ${url}`)
-  const body = { model: 'noop', max_tokens: 1, messages: [{ role: 'user', content: 'ping' }] }
-
-  try {
-    const res = await httpRequest(body, url, apiKey, authType)
-    await readBody(res)
-    console.log(`[capability] probe response: ${res.statusCode}`)
-
-    // 404 or 405 → provider doesn't have /v1/messages
-    if (res.statusCode === 404 || res.statusCode === 405) {
-      return 'openai'
-    }
-    // Anything else (200, 400, 401, 429, etc.) means the endpoint exists
-    return 'anthropic'
-  } catch (err) {
-    console.log(`[capability] probe error: ${err.message}`)
-    return 'openai'
-  }
-}
-
-async function ensureCapability (serviceConfig, apiKey, authType) {
-  const name = serviceConfig.name
-  if (capabilityCache[name]) {
-    return capabilityCache[name]
-  }
-
-  const format = await detectCapability(serviceConfig, apiKey, authType)
-  setCapability(name, format)
-  return format
 }
 
 // ─── Native Anthropic proxy ───────────────────────────────────────────────
